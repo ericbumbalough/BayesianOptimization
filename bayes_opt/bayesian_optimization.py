@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from collections import deque
+from collections.abc import Iterable
 from os import PathLike
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -28,7 +29,7 @@ from bayes_opt.target_space import TargetSpace
 from bayes_opt.util import ensure_rng
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Callable
 
     from numpy.random import RandomState
     from numpy.typing import NDArray
@@ -87,7 +88,7 @@ class BayesianOptimization:
     def __init__(
         self,
         f: Callable[..., float] | None,
-        pbounds: Mapping[str, tuple[float, float]],
+        pbounds: BoundsMapping,
         acquisition_function: AcquisitionFunction | None = None,
         constraint: NonlinearConstraint | None = None,
         random_state: int | RandomState | None = None,
@@ -190,6 +191,92 @@ class BayesianOptimization:
         """
         return self._space.res()
 
+    def predict(
+        self,
+        params: dict[str, Any] | Iterable[dict[str, Any]],
+        return_std=False,
+        return_cov=False,
+        fit_gp=True,
+    ) -> float | NDArray[Float] | tuple[float | NDArray[Float], float | NDArray[Float]]:
+        """Predict the target function value at given parameters.
+
+        Parameters
+        ---------
+        params: dict or iterable of dicts
+            The parameters where the prediction is made.
+
+        return_std: bool, optional(default=False)
+            If True, the standard deviation of the prediction is returned.
+
+        return_cov: bool, optional(default=False)
+            If True, the covariance of the prediction is returned.
+
+        fit_gp: bool, optional(default=True)
+            If True, the internal Gaussian Process model is fitted before
+            making the prediction.
+
+        Returns
+        -------
+        mean: float or np.ndarray
+            The predicted mean of the target function at the given parameters.
+            When params is a dict, returns a scalar. When params is an iterable,
+            returns a 1D array.
+
+        std_or_cov: float or np.ndarray (only if return_std or return_cov is True)
+            The predicted standard deviation or covariance of the target function
+            at the given parameters.
+        """
+        # Validate param types
+        if isinstance(params, dict):
+            params_array = self._space.params_to_array(params).reshape(1, -1)
+            single_param = True
+        elif isinstance(params, Iterable) and not isinstance(params, str):
+            # convert iterable of dicts to 2D array
+            params_array = np.array([self._space.params_to_array(p) for p in params])
+            single_param = False
+        else:
+            msg = f"params must be a dict or iterable of dicts, got {type(params).__name__}"
+            raise TypeError(msg)
+
+        # Validate mutual exclusivity of return_std and return_cov
+        if return_std and return_cov:
+            msg = "return_std and return_cov cannot both be True"
+            raise ValueError(msg)
+
+        if fit_gp:
+            if len(self._space) == 0:
+                msg = (
+                    "The Gaussian Process model cannot be fitted with zero observations. To use predict(), "
+                    "without fitting the GP, set fit_gp=False. The predictions will then be made using the "
+                    "GP prior."
+                )
+                raise RuntimeError(msg)
+            self.acquisition_function._fit_gp(self._gp, self._space)
+
+        res = self._gp.predict(params_array, return_std=return_std, return_cov=return_cov)
+
+        if return_std or return_cov:
+            mean, std_or_cov = res
+        else:
+            mean = res
+
+        # Shape semantics: dict input returns scalars, list input returns arrays
+        # Ensure list input always returns arrays (convert scalar to 1D if needed)
+        if not single_param and mean.ndim == 0:
+            mean = np.atleast_1d(mean)
+        # ruff complains when nesting conditionals, so this three-way split is necessary
+        if not single_param and (return_std or return_cov) and std_or_cov.ndim == 0:
+            std_or_cov = np.atleast_1d(std_or_cov)
+
+        if single_param and mean.ndim > 0:
+            mean = mean[0]
+        if single_param and return_std and std_or_cov.ndim > 0:
+            std_or_cov = std_or_cov[0]
+
+        if return_std or return_cov:
+            return mean, std_or_cov
+        return mean
+
     def register(
         self, params: ParamsType, target: float, constraint_value: float | NDArray[Float] | None = None
     ) -> None:
@@ -206,17 +293,6 @@ class BayesianOptimization:
         constraint_value: float or None
             Value of the constraint function at the observation, if any.
         """
-        # TODO: remove in future version
-        if isinstance(params, np.ndarray) and not self._sorting_warning_already_shown:
-            msg = (
-                "You're attempting to register an np.ndarray. In previous versions, the optimizer internally"
-                " sorted parameters by key and expected any registered array to respect this order."
-                " In the current and any future version the order as given by the pbounds dictionary will be"
-                " used. If you wish to retain sorted parameters, please manually sort your pbounds"
-                " dictionary before constructing the optimizer."
-            )
-            warn(msg, stacklevel=1)
-            self._sorting_warning_already_shown = True
         self._space.register(params, target, constraint_value)
         self.logger.log_optimization_step(
             self._space.keys, self._space.res()[-1], self._space.params_config, self.max
@@ -236,18 +312,6 @@ class BayesianOptimization:
             If True, the optimizer will evaluate the points when calling
             maximize(). Otherwise it will evaluate it at the moment.
         """
-        # TODO: remove in future version
-        if isinstance(params, np.ndarray) and not self._sorting_warning_already_shown:
-            msg = (
-                "You're attempting to register an np.ndarray. In previous versions, the optimizer internally"
-                " sorted parameters by key and expected any registered array to respect this order."
-                " In the current and any future version the order as given by the pbounds dictionary will be"
-                " used. If you wish to retain sorted parameters, please manually sort your pbounds"
-                " dictionary before constructing the optimizer."
-            )
-            warn(msg, stacklevel=1)
-            self._sorting_warning_already_shown = True
-            params = self._space.array_to_params(params)
         if lazy:
             self._queue.append(params)
         else:
@@ -256,7 +320,7 @@ class BayesianOptimization:
                 self._space.keys, self._space.res()[-1], self._space.params_config, self.max
             )
 
-    def random_sample(self, n: int = 1) -> dict[str, float | NDArray[Float]]:
+    def random_sample(self, n: int = 1) -> list[dict[str, float | NDArray[Float]]]:
         """Generate a random sample of parameters from the target space.
 
         Parameters
@@ -318,8 +382,8 @@ class BayesianOptimization:
             probe based on the acquisition function. This means that the GP may
             not be fitted on all points registered to the target space when the
             method completes. If you intend to use the GP model after the
-            optimization routine, make sure to fit it manually, e.g. by calling
-            ``optimizer._gp.fit(optimizer.space.params, optimizer.space.target)``.
+            optimization routine, make sure to call predict() with fit_gp=True.
+
         """
         # Log optimization start
         self.logger.log_optimization_start(self._space.keys)
@@ -413,29 +477,29 @@ class BayesianOptimization:
 
         return False
 
-    def save_state(self, path: str | PathLike[str]) -> None:
-        """Save complete state for reconstruction of the optimizer.
+    def _state_to_dict(self) -> dict[str, Any]:
+        """Convert optimizer state to a dictionary.
 
-        Parameters
-        ----------
-        path : str or PathLike
-            Path to save the optimization state
+        Returns
+        -------
+        dict
+            Dictionary containing the complete optimizer state.
         """
         random_state = None
         if self._random_state is not None:
-            state_tuple = self._random_state.get_state()
+            state_dict = self._random_state.get_state(legacy=False)
             random_state = {
-                "bit_generator": state_tuple[0],
-                "state": state_tuple[1].tolist(),
-                "pos": state_tuple[2],
-                "has_gauss": state_tuple[3],
-                "cached_gaussian": state_tuple[4],
+                "bit_generator": state_dict["bit_generator"],
+                "state": state_dict["state"]["key"].tolist(),
+                "pos": state_dict["state"]["pos"],
+                "has_gauss": state_dict["has_gauss"],
+                "cached_gaussian": state_dict["gauss"],
             }
 
         # Get constraint values if they exist
         constraint_values = self._space._constraint_values.tolist() if self.is_constrained else None
         acquisition_params = self._acquisition_function.get_acquisition_params()
-        state = {
+        return {
             "pbounds": {key: self._space._bounds[i].tolist() for i, key in enumerate(self._space.keys)},
             # Add current transformed bounds if using bounds transformer
             "transformed_bounds": (self._space.bounds.tolist() if self._bounds_transformer else None),
@@ -462,20 +526,14 @@ class BayesianOptimization:
             "timedelta": self._timedelta.total_seconds() if self._timedelta else "",
         }
 
-        with Path(path).open("w") as f:
-            json.dump(state, f, indent=2)
-
-    def load_state(self, path: str | PathLike[str]) -> None:
-        """Load optimizer state from a JSON file.
+    def _load_state_dict(self, state: dict[str, Any]) -> None:
+        """Load optimizer state from a dictionary.
 
         Parameters
         ----------
-        path : str or PathLike
-            Path to the JSON file containing the optimizer state.
+        state : dict
+            Dictionary containing the optimizer state.
         """
-        with Path(path).open("r") as file:
-            state = json.load(file)
-
         params_array = np.asarray(state["params"], dtype=np.float64)
         target_array = np.asarray(state["target"], dtype=np.float64)
         constraint_array = (
@@ -529,3 +587,27 @@ class BayesianOptimization:
             else None
         )
         self._timedelta = timedelta(seconds=state["timedelta"]) if state["timedelta"] else None
+
+    def save_state(self, path: str | PathLike[str]) -> None:
+        """Save complete state for reconstruction of the optimizer.
+
+        Parameters
+        ----------
+        path : str or PathLike
+            Path to save the optimization state
+        """
+        state = self._state_to_dict()
+        with Path(path).open("w") as f:
+            json.dump(state, f, indent=2)
+
+    def load_state(self, path: str | PathLike[str]) -> None:
+        """Load optimizer state from a JSON file.
+
+        Parameters
+        ----------
+        path : str or PathLike
+            Path to the JSON file containing the optimizer state.
+        """
+        with Path(path).open("r") as file:
+            state = json.load(file)
+        self._load_state_dict(state)

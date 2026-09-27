@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import sys
 
 import numpy as np
@@ -67,6 +68,23 @@ def constrained_target_space(target_func):
     return TargetSpace(
         target_func=target_func, pbounds={"x": (1, 4), "y": (0, 3)}, constraint=constraint_model
     )
+
+
+class FixedSuggestion(acquisition.AcquisitionFunction):
+    def __init__(self, suggestion):
+        super().__init__()
+        self.suggestion = np.array(suggestion)
+
+    def suggest(self, *args, **kwargs):
+        return self.suggestion
+
+    def base_acq(self, mean, std):
+        return mean
+
+    def get_acquisition_params(self):
+        return {}
+
+    def set_acquisition_params(self, params): ...
 
 
 class MockAcquisition(acquisition.AcquisitionFunction):
@@ -355,6 +373,19 @@ def test_gphedge_softmax_sampling(random_state):
         assert good_index == acq._sample_idx_from_softmax_gains(random_state=random_state)
 
 
+def test_gphedge_skips_duplicate_candidate_when_unique_candidate_exists(gp, target_space, random_state):
+    duplicate = np.array([2.5, 0.5])
+    unique = np.array([3.0, 1.0])
+    target_space.register(duplicate, target=sum(duplicate))
+
+    acq = acquisition.GPHedge(base_acquisitions=[FixedSuggestion(duplicate), FixedSuggestion(unique)])
+    acq.gains = np.array([100.0, 0.0])
+
+    suggestion = acq.suggest(gp=gp, target_space=target_space, fit_gp=False, random_state=random_state)
+
+    np.testing.assert_array_equal(suggestion, unique)
+
+
 def test_gphedge_integration(gp, target_space, random_state):
     base_acq1 = acquisition.UpperConfidenceBound()
     base_acq2 = acquisition.ProbabilityOfImprovement(xi=0.01)
@@ -373,14 +404,14 @@ def test_gphedge_integration(gp, target_space, random_state):
 
 @pytest.mark.parametrize("kappa", [-1.0, -sys.float_info.epsilon, -np.inf])
 def test_upper_confidence_bound_invalid_kappa_error(kappa: float):
-    with pytest.raises(ValueError, match="kappa must be greater than or equal to 0."):
+    with pytest.raises(ValueError, match=re.escape("kappa must be greater than or equal to 0.")):
         acquisition.UpperConfidenceBound(kappa=kappa)
 
 
 @pytest.mark.parametrize("exploration_decay", [-0.1, 0.0, 1.1, 2.0, np.inf])
 def test_upper_confidence_bound_invalid_exploration_decay_error(exploration_decay: float):
     with pytest.raises(
-        ValueError, match="exploration_decay must be greater than 0 and less than or equal to 1."
+        ValueError, match=re.escape("exploration_decay must be greater than 0 and less than or equal to 1.")
     ):
         acquisition.UpperConfidenceBound(kappa=1.0, exploration_decay=exploration_decay)
 
@@ -388,21 +419,21 @@ def test_upper_confidence_bound_invalid_exploration_decay_error(exploration_deca
 @pytest.mark.parametrize("exploration_decay_delay", [-1, -10, "not_an_int", 1.5])
 def test_upper_confidence_bound_invalid_exploration_decay_delay_error(exploration_decay_delay):
     with pytest.raises(
-        ValueError, match="exploration_decay_delay must be an integer greater than or equal to 0."
+        ValueError, match=re.escape("exploration_decay_delay must be an integer greater than or equal to 0.")
     ):
         acquisition.UpperConfidenceBound(kappa=1.0, exploration_decay_delay=exploration_decay_delay)
 
 
 @pytest.mark.parametrize("xi", [-0.1, -1.0, -np.inf])
 def test_probability_of_improvement_invalid_xi_error(xi: float):
-    with pytest.raises(ValueError, match="xi must be greater than or equal to 0."):
+    with pytest.raises(ValueError, match=re.escape("xi must be greater than or equal to 0.")):
         acquisition.ProbabilityOfImprovement(xi=xi)
 
 
 @pytest.mark.parametrize("exploration_decay", [-0.1, 0.0, 1.1, 2.0, np.inf])
 def test_probability_of_improvement_invalid_exploration_decay_error(exploration_decay: float):
     with pytest.raises(
-        ValueError, match="exploration_decay must be greater than 0 and less than or equal to 1."
+        ValueError, match=re.escape("exploration_decay must be greater than 0 and less than or equal to 1.")
     ):
         acquisition.ProbabilityOfImprovement(xi=0.01, exploration_decay=exploration_decay)
 
@@ -410,21 +441,21 @@ def test_probability_of_improvement_invalid_exploration_decay_error(exploration_
 @pytest.mark.parametrize("exploration_decay_delay", [-1, -10, "not_an_int", 1.5])
 def test_probability_of_improvement_invalid_exploration_decay_delay_error(exploration_decay_delay):
     with pytest.raises(
-        ValueError, match="exploration_decay_delay must be an integer greater than or equal to 0."
+        ValueError, match=re.escape("exploration_decay_delay must be an integer greater than or equal to 0.")
     ):
         acquisition.ProbabilityOfImprovement(xi=0.01, exploration_decay_delay=exploration_decay_delay)
 
 
 @pytest.mark.parametrize("xi", [-0.1, -1.0, -np.inf])
 def test_expected_improvement_invalid_xi_error(xi: float):
-    with pytest.raises(ValueError, match="xi must be greater than or equal to 0."):
+    with pytest.raises(ValueError, match=re.escape("xi must be greater than or equal to 0.")):
         acquisition.ExpectedImprovement(xi=xi)
 
 
 @pytest.mark.parametrize("exploration_decay", [-0.1, 0.0, 1.1, 2.0, np.inf])
 def test_expected_improvement_invalid_exploration_decay_error(exploration_decay: float):
     with pytest.raises(
-        ValueError, match="exploration_decay must be greater than 0 and less than or equal to 1."
+        ValueError, match=re.escape("exploration_decay must be greater than 0 and less than or equal to 1.")
     ):
         acquisition.ExpectedImprovement(xi=0.01, exploration_decay=exploration_decay)
 
@@ -432,7 +463,7 @@ def test_expected_improvement_invalid_exploration_decay_error(exploration_decay:
 @pytest.mark.parametrize("exploration_decay_delay", [-1, -10, "not_an_int", 1.5])
 def test_expected_improvement_invalid_exploration_decay_delay_error(exploration_decay_delay):
     with pytest.raises(
-        ValueError, match="exploration_decay_delay must be an integer greater than or equal to 0."
+        ValueError, match=re.escape("exploration_decay_delay must be an integer greater than or equal to 0.")
     ):
         acquisition.ExpectedImprovement(xi=0.01, exploration_decay_delay=exploration_decay_delay)
 

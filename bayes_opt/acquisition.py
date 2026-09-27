@@ -99,13 +99,13 @@ class AcquisitionFunction(abc.ABC):
         )
         raise NotImplementedError(error_msg)
 
-    def set_acquisition_params(self, **params) -> None:
+    def set_acquisition_params(self, params: dict[str, Any]) -> None:
         """
         Set the parameters of the acquisition function.
 
         Parameters
         ----------
-        **params : dict
+        params : dict
             The parameters of the acquisition function.
         """
         error_msg = (
@@ -553,7 +553,7 @@ class UpperConfidenceBound(AcquisitionFunction):
         ):
             self.kappa = self.kappa * self.exploration_decay
 
-    def get_acquisition_params(self) -> dict:
+    def get_acquisition_params(self) -> dict[str, Any]:
         """Get the current acquisition function parameters.
 
         Returns
@@ -567,7 +567,7 @@ class UpperConfidenceBound(AcquisitionFunction):
             "exploration_decay_delay": self.exploration_decay_delay,
         }
 
-    def set_acquisition_params(self, params: dict) -> None:
+    def set_acquisition_params(self, params: dict[str, Any]) -> None:
         """Set the acquisition function parameters.
 
         Parameters
@@ -733,7 +733,7 @@ class ProbabilityOfImprovement(AcquisitionFunction):
         ):
             self.xi = self.xi * self.exploration_decay
 
-    def get_acquisition_params(self) -> dict:
+    def get_acquisition_params(self) -> dict[str, Any]:
         """Get the current acquisition function parameters.
 
         Returns
@@ -747,7 +747,7 @@ class ProbabilityOfImprovement(AcquisitionFunction):
             "exploration_decay_delay": self.exploration_decay_delay,
         }
 
-    def set_acquisition_params(self, params: dict) -> None:
+    def set_acquisition_params(self, params: dict[str, Any]) -> None:
         """Set the acquisition function parameters.
 
         Parameters
@@ -922,7 +922,7 @@ class ExpectedImprovement(AcquisitionFunction):
         ):
             self.xi = self.xi * self.exploration_decay
 
-    def get_acquisition_params(self) -> dict:
+    def get_acquisition_params(self) -> dict[str, Any]:
         """Get the current acquisition function parameters.
 
         Returns
@@ -936,7 +936,7 @@ class ExpectedImprovement(AcquisitionFunction):
             "exploration_decay_delay": self.exploration_decay_delay,
         }
 
-    def set_acquisition_params(self, params: dict) -> None:
+    def set_acquisition_params(self, params: dict[str, Any]) -> None:
         """Set the acquisition function parameters.
 
         Parameters
@@ -1147,7 +1147,7 @@ class ConstantLiar(AcquisitionFunction):
 
         return x_max
 
-    def get_acquisition_params(self) -> dict:
+    def get_acquisition_params(self) -> dict[str, Any]:
         """Get the current acquisition function parameters.
 
         Returns
@@ -1163,7 +1163,7 @@ class ConstantLiar(AcquisitionFunction):
             "rtol": self.rtol,
         }
 
-    def set_acquisition_params(self, params: dict) -> None:
+    def set_acquisition_params(self, params: dict[str, Any]) -> None:
         """Set the acquisition function parameters.
 
         Parameters
@@ -1316,9 +1316,18 @@ class GPHedge(AcquisitionFunction):
         ]
         self.previous_candidates = np.array(x_max)
         idx = self._sample_idx_from_softmax_gains(random_state=random_state)
+        if not target_space._allow_duplicate_points and x_max[idx] in target_space:
+            # If every candidate is a duplicate, keep the original choice.
+            # Avoiding duplicates then requires generating new candidates, which
+            # is outside GPHedge's candidate-selection responsibility.
+            non_duplicate_idx = [idx for idx, x in enumerate(x_max) if x not in target_space]
+            if len(non_duplicate_idx) > 0:
+                cumsum_softmax_g = np.cumsum(softmax(self.gains[non_duplicate_idx]))
+                r = random_state.rand()
+                idx = non_duplicate_idx[np.argmax(r <= cumsum_softmax_g)]
         return x_max[idx]
 
-    def get_acquisition_params(self) -> dict:
+    def get_acquisition_params(self) -> dict[str, Any]:
         """Get the current acquisition function parameters.
 
         Returns
@@ -1334,7 +1343,7 @@ class GPHedge(AcquisitionFunction):
             else None,
         }
 
-    def set_acquisition_params(self, params: dict) -> None:
+    def set_acquisition_params(self, params: dict[str, Any]) -> None:
         """Set the acquisition function parameters.
 
         Parameters
