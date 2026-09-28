@@ -145,8 +145,7 @@ class BayesianOptimization:
 
         self._termination_criteria = termination_criteria if termination_criteria is not None else {}
 
-        self._initial_iterations = 0
-        self._optimizing_iterations = 0
+        self._iterations = 0
 
         self._start_time: datetime | None = None
         self._timedelta: timedelta | None = None
@@ -391,24 +390,21 @@ class BayesianOptimization:
         if self._start_time is None and "time" in self._termination_criteria:
             self._start_time = datetime.now(timezone.utc)
 
-        # Set iterations as termination criteria if others not supplied, increment existing if it already exists.
-        self._termination_criteria["iterations"] = max(
-            self._termination_criteria.get("iterations", 0) + n_iter + init_points, 1
-        )
+        # Set iterations as termination criteria
+        self._termination_criteria["iterations"] = n_iter
 
-        # Prime the queue with random points
+        # Prime the queue with random pointss
         self._prime_queue(init_points)
 
         while self._queue or not self.termination_criteria_met():
             try:
                 x_probe = self._queue.popleft()
-                self._initial_iterations += 1
             except IndexError:
                 x_probe = self.suggest()
-                self._optimizing_iterations += 1
+                self._iterations += 1
             self.probe(x_probe, lazy=False)
 
-            if self._bounds_transformer and not self._queue:
+            if self._bounds_transformer and self._iterations > 0:
                 # The bounds transformer should only modify the bounds after
                 # the init_points points (only for the true iterations)
                 self.set_bounds(self._bounds_transformer.transform(self._space))
@@ -435,10 +431,7 @@ class BayesianOptimization:
     def termination_criteria_met(self) -> bool:
         """Determine if the termination criteria have been met."""
         if "iterations" in self._termination_criteria:
-            if (
-                self._optimizing_iterations + self._initial_iterations
-                >= self._termination_criteria["iterations"]
-            ):
+            if self._iterations >= self._termination_criteria["iterations"]:
                 return True
 
         if "value" in self._termination_criteria:
@@ -455,10 +448,7 @@ class BayesianOptimization:
             running_max = list(accumulate(self._space.target, max))
             # Determine improvements that have occurred each iteration
             improvements = np.diff(running_max)
-            if (
-                self._initial_iterations + self._optimizing_iterations
-                >= self._termination_criteria["convergence_tol"]["n_iters"]
-            ):
+            if self._iterations >= self._termination_criteria["convergence_tol"]["n_iters"]:
                 # Check if there are improvements in the specified number of iterations
                 relevant_improvements = (
                     improvements
@@ -518,8 +508,7 @@ class BayesianOptimization:
             "random_state": random_state,
             "acquisition_params": acquisition_params,
             "termination_criteria": self._termination_criteria,
-            "initial_iterations": self._initial_iterations,
-            "optimizing_iterations": self._optimizing_iterations,
+            "_iterations": self._iterations,
             "start_time": datetime.strftime(self._start_time, "%Y-%m-%dT%H:%M:%SZ")
             if self._start_time
             else "",
@@ -578,8 +567,7 @@ class BayesianOptimization:
             self._random_state.set_state(random_state_tuple)
 
         self._termination_criteria = state["termination_criteria"]
-        self._initial_iterations = state["initial_iterations"]
-        self._optimizing_iterations = state["optimizing_iterations"]
+        self._iterations = state["_iterations"]
         # Previously saved as UTC, so explicitly parse as UTC time.
         self._start_time = (
             datetime.strptime(state["start_time"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)

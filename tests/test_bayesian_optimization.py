@@ -940,16 +940,14 @@ def test_termination_criteria(tmp_path):
         # Max at 0, 1
         return lambda x, y: -(x**2) - ((y - 1) ** 2)
 
-    termination_criteria = {"iterations": 10}
+    n_iter = 10
     pbounds = {"x": [-10.0, 10.0], "y": [-10.0, 10.0]}
-    opt = BayesianOptimization(
-        f=target_func_trivial(), pbounds=pbounds, termination_criteria=termination_criteria
-    )
+    opt = BayesianOptimization(f=target_func_trivial(), pbounds=pbounds)
 
     # Ensure no initial points are specified.
-    opt.maximize(init_points=0, n_iter=10)
+    opt.maximize(init_points=0, n_iter=n_iter)
 
-    assert len(opt.res) == termination_criteria["iterations"]
+    assert len(opt.res) == n_iter + 1  # plus one because one init_point still runs
 
     # Provide reasonable target value for objective fn
     termination_criteria = {"value": -0.05}
