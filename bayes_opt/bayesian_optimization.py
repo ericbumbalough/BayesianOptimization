@@ -11,7 +11,7 @@ from collections import deque
 from collections.abc import Iterable
 from os import PathLike
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Mapping
 from warnings import warn
 from datetime import timedelta, datetime, timezone
 from itertools import accumulate
@@ -26,6 +26,7 @@ from bayes_opt.domain_reduction import DomainTransformer
 from bayes_opt.logger import ScreenLogger
 from bayes_opt.parameter import wrap_kernel
 from bayes_opt.target_space import TargetSpace
+from bayes_opt.termination_criteria import TerminationCriteria
 from bayes_opt.util import ensure_rng
 
 if TYPE_CHECKING:
@@ -95,7 +96,6 @@ class BayesianOptimization:
         verbose: int = 2,
         bounds_transformer: DomainTransformer | None = None,
         allow_duplicate_points: bool = False,
-        termination_criteria: Mapping[str, float | Mapping[str, float]] | None = None,
     ):
         self._random_state = ensure_rng(random_state)
         self._allow_duplicate_points = allow_duplicate_points
@@ -143,16 +143,11 @@ class BayesianOptimization:
 
         self._sorting_warning_already_shown = False  # TODO: remove in future version
 
-        self._termination_criteria = termination_criteria if termination_criteria is not None else {}
-
         self._iterations = 0
 
         self._start_time: datetime | None = None
         self._timedelta: timedelta | None = None
-
-        # Directly instantiate timedelta if provided
-        if termination_criteria and "time" in termination_criteria:
-            self._timedelta = timedelta(**termination_criteria["time"])
+        self._termination_criteria: TerminationCriteria | None = None
 
         # Initialize logger
         self.logger = ScreenLogger(verbose=self._verbose, is_constrained=self.is_constrained)
@@ -362,7 +357,12 @@ class BayesianOptimization:
 
         self._queue.extend(self.random_sample(init_points))
 
-    def maximize(self, init_points: int = 5, n_iter: int = 25) -> None:
+    def maximize(
+        self,
+        init_points: int = 5,
+        n_iter: int = 25,
+        additonal_termination_criteria: TerminationCriteria | None = None,
+    ) -> None:
         r"""
         Maximize the given function over the target space.
 
@@ -374,6 +374,9 @@ class BayesianOptimization:
         n_iter: int, optional(default=25)
             Number of iterations where the method attempts to find the maximum
             value. Used when other termination criteria are not provided.
+
+        additonal_termination_criteria: TerminationCriteria, optional(default=None)
+            Additional termination
 
         Warning
         -------
@@ -387,16 +390,19 @@ class BayesianOptimization:
         # Log optimization start
         self.logger.log_optimization_start(self._space.keys)
 
-        if self._start_time is None and "time" in self._termination_criteria:
+        self.n_iter = n_iter
+        if additonal_termination_criteria is None:
+            self._termination_criteria = TerminationCriteria()
+        else:
+            self._termination_criteria = additonal_termination_criteria
+
+        if self._start_time is None and self._termination_criteria.termination_wall_time:
             self._start_time = datetime.now(timezone.utc)
 
-        # Set iterations as termination criteria
-        self._termination_criteria["iterations"] = n_iter
-
-        # Prime the queue with random pointss
+        # Prime the queue with random points
         self._prime_queue(init_points)
 
-        while self._queue or not self.termination_criteria_met():
+        while self._queue or not self._termination_criteria.met(self):
             try:
                 x_probe = self._queue.popleft()
             except IndexError:
@@ -428,36 +434,6 @@ class BayesianOptimization:
             params["kernel"] = wrap_kernel(kernel=params["kernel"], transform=self._space.kernel_transform)
         self._gp.set_params(**params)
 
-    def termination_criteria_met(self) -> bool:
-        """Determine if the termination criteria have been met."""
-        if "iterations" in self._termination_criteria:
-            if self._iterations >= self._termination_criteria["iterations"]:
-                return True
-
-        if "value" in self._termination_criteria:
-            if self.max is not None and self.max["target"] >= self._termination_criteria["value"]:
-                return True
-
-        if "time" in self._termination_criteria:
-            time_taken = datetime.now(timezone.utc) - self._start_time
-            if time_taken >= self._timedelta:
-                return True
-
-        if "convergence_tol" in self._termination_criteria and len(self._space.target) >= 2:
-            if self._iterations >= self._termination_criteria["convergence_tol"]["n_iters"]:
-                # Determine improvements that have occurred each iteration
-                improvements = np.diff(np.maximum.accumulate(self._space.target))
-                # Check if there are improvements in the specified number of iterations
-                relevant_improvements = improvements[
-                    -self._termination_criteria["convergence_tol"]["n_iters"] :
-                ]
-
-                if relevant_improvements.max() <= self._termination_criteria["convergence_tol"]["abs_tol"]:
-                    # There has been no large enough improvement within the iterations specified
-                    return True
-
-        return False
-
     def _state_to_dict(self) -> dict[str, Any]:
         """Convert optimizer state to a dictionary.
 
@@ -476,6 +452,10 @@ class BayesianOptimization:
                 "has_gauss": state_dict["has_gauss"],
                 "cached_gaussian": state_dict["gauss"],
             }
+
+        termination_criteria_dict = None
+        if self._termination_criteria is not None:
+            termination_criteria_dict = self._termination_criteria._state_to_dict()
 
         # Get constraint values if they exist
         constraint_values = self._space._constraint_values.tolist() if self.is_constrained else None
@@ -498,7 +478,7 @@ class BayesianOptimization:
             "verbose": self._verbose,
             "random_state": random_state,
             "acquisition_params": acquisition_params,
-            "termination_criteria": self._termination_criteria,
+            "termination_criteria": termination_criteria_dict,
             "_iterations": self._iterations,
             "start_time": datetime.strftime(self._start_time, "%Y-%m-%dT%H:%M:%SZ")
             if self._start_time
@@ -557,7 +537,8 @@ class BayesianOptimization:
             )
             self._random_state.set_state(random_state_tuple)
 
-        self._termination_criteria = state["termination_criteria"]
+        if state["termination_criteria"] is not None:
+            self._termination_criteria = TerminationCriteria(**state["termination_criteria"])
         self._iterations = state["_iterations"]
         # Previously saved as UTC, so explicitly parse as UTC time.
         self._start_time = (

@@ -10,6 +10,7 @@ from bayes_opt.constraint import ConstraintModel
 from bayes_opt.domain_reduction import SequentialDomainReductionTransformer
 from bayes_opt.logger import ScreenLogger
 from bayes_opt.target_space import TargetSpace
+from bayes_opt.termination_criteria import TerminationCriteria
 
 __version__ = importlib.metadata.version("bayesian-optimization")
 
@@ -20,5 +21,6 @@ __all__ = [
     "ScreenLogger",
     "SequentialDomainReductionTransformer",
     "TargetSpace",
+    "TerminationCriteria",
     "acquisition",
 ]

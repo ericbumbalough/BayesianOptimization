@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import pickle
 import warnings
 from pathlib import Path
@@ -15,6 +15,7 @@ from bayes_opt.domain_reduction import SequentialDomainReductionTransformer
 from bayes_opt.exception import NotUniqueError
 from bayes_opt.parameter import BayesParameter
 from bayes_opt.target_space import TargetSpace
+from bayes_opt.termination_criteria import TerminationCriteria
 from bayes_opt.util import ensure_rng
 
 
@@ -613,6 +614,34 @@ def test_save_load_w_custom_parameter(tmp_path):
         np.testing.assert_array_almost_equal(suggestion1["sides"], suggestion2["sides"], decimal=7)
 
 
+def test_save_load_termination_criteria(tmp_path):
+    """Test saving and loading optimizer state with termination criteria."""
+    optimizer = BayesianOptimization(f=target_func, pbounds=PBOUNDS, random_state=1, verbose=0)
+    optimizer.maximize(
+        init_points=2,
+        n_iter=3,
+        additonal_termination_criteria=TerminationCriteria(
+            termination_value=300,
+            termination_wall_time=timedelta(seconds=30),
+            termination_improvement_value=0.01,
+            termination_improvement_iter=30,
+        ),
+    )
+
+    # Save state
+    state_path = tmp_path / "optimizer_state.json"
+    optimizer.save_state(state_path)
+
+    # Create new optimizer with same configuration
+    new_optimizer = BayesianOptimization(f=target_func, pbounds=PBOUNDS, random_state=1, verbose=0)
+    new_optimizer.load_state(state_path)
+
+    assert (
+        optimizer._termination_criteria._state_to_dict()
+        == new_optimizer._termination_criteria._state_to_dict()
+    )
+
+
 def test_predict():
     """Test the predict method of the optimizer."""
     optimizer = BayesianOptimization(f=target_func, pbounds=PBOUNDS, random_state=1, verbose=0)
@@ -949,40 +978,36 @@ def test_termination_criteria(tmp_path):
     assert len(opt.res) == n_iter + 1  # plus one because one init_point still runs
 
     # Provide reasonable target value for objective fn
-    termination_criteria = {"value": -0.05}
-    opt = BayesianOptimization(
-        f=target_func_trivial(), pbounds=pbounds, termination_criteria=termination_criteria
-    )
+    termination_criteria = TerminationCriteria(termination_value=-0.05)
+    opt = BayesianOptimization(f=target_func_trivial(), pbounds=pbounds)
 
     # Call with large number of iterations, so that this is not the termination criteria
-    opt.maximize(init_points=5, n_iter=1_000)
+    opt.maximize(init_points=5, n_iter=1_000, additonal_termination_criteria=termination_criteria)
 
-    assert opt.max["target"] > termination_criteria["value"]
+    assert opt.max["target"] > termination_criteria.termination_value
+    assert len(opt.res) < 1000
 
     # 3 seconds of maximizing before termination
-    termination_criteria = {"time": {"seconds": 3}}
-    opt = BayesianOptimization(
-        f=target_func_trivial(), pbounds=pbounds, termination_criteria=termination_criteria
-    )
+    termination_criteria = TerminationCriteria(termination_wall_time=timedelta(seconds=5))
+    opt = BayesianOptimization(f=target_func_trivial(), pbounds=pbounds)
 
     start = datetime.now(timezone.utc)
     # Call with large number of iterations, so that this is not the termination criteria
-    opt.maximize(n_iter=1_000, init_points=1)
+    opt.maximize(n_iter=1_000, init_points=1, additonal_termination_criteria=termination_criteria)
 
     # Allow ~200ms tolerance on timing
-    assert (
-        abs((datetime.now(timezone.utc) - start).total_seconds() - termination_criteria["time"]["seconds"])
-        < 0.2
+    assert datetime.now(timezone.utc) - start == pytest.approx(
+        termination_criteria.termination_wall_time, abs=timedelta(seconds=0.2)
     )
 
     # Terminate if no improvement in last 3 iterations
-    termination_criteria = {"convergence_tol": {"n_iters": 3, "abs_tol": 0}}
-
-    opt = BayesianOptimization(
-        f=target_func_trivial(), pbounds=pbounds, termination_criteria=termination_criteria
+    termination_criteria = TerminationCriteria(
+        termination_improvement_value=0, termination_improvement_iter=3
     )
+    # Fix random state to avoid lucky intial points getting near the max
+    opt = BayesianOptimization(f=target_func_trivial(), pbounds=pbounds, random_state=1)
     # Call with number of iterations which will not lead to termination criteria on iterations
-    opt.maximize(n_iter=1_000, init_points=5)
+    opt.maximize(n_iter=1_000, init_points=5, additonal_termination_criteria=termination_criteria)
 
     # Check that none of the last 3 iterations improved
     improvements = np.diff(np.maximum.accumulate(opt._space.target))
@@ -990,12 +1015,12 @@ def test_termination_criteria(tmp_path):
     assert improvements[-4] > 0
 
     # Converged if no improvement above 1 in last 10 iterations
-    termination_criteria = {"convergence_tol": {"n_iters": 10, "abs_tol": 1}}
-
-    opt = BayesianOptimization(
-        f=target_func_trivial(), pbounds=pbounds, termination_criteria=termination_criteria
+    termination_criteria = TerminationCriteria(
+        termination_improvement_iter=10, termination_improvement_value=1
     )
-    opt.maximize(n_iter=1_000, init_points=5)
+    # Fix random state to avoid lucky intial points getting near the max
+    opt = BayesianOptimization(f=target_func_trivial(), pbounds=pbounds, random_state=1)
+    opt.maximize(n_iter=1_000, init_points=5, additonal_termination_criteria=termination_criteria)
 
     improvements = np.diff(np.maximum.accumulate(opt._space.target))
     assert improvements[-10:].max() < 1
