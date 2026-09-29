@@ -984,11 +984,12 @@ def test_termination_criteria(tmp_path):
     # Call with number of iterations which will not lead to termination criteria on iterations
     opt.maximize(n_iter=1_000, init_points=5)
 
-    # Check that none of the last 3 values are the maximum
-    no_improvement_in_3 = all([value < opt._space.max()["target"] for value in opt._space.target[-3:]])
-    assert no_improvement_in_3
+    # Check that none of the last 3 iterations improved
+    improvements = np.diff(np.maximum.accumulate(opt._space.target))
+    assert all(improvements[-3:] == 0)
+    assert improvements[-4] > 0
 
-    # Converged if minimum improvement below 1 in last 10 iterations
+    # Converged if no improvement above 1 in last 10 iterations
     termination_criteria = {"convergence_tol": {"n_iters": 10, "abs_tol": 1}}
 
     opt = BayesianOptimization(
@@ -996,6 +997,6 @@ def test_termination_criteria(tmp_path):
     )
     opt.maximize(n_iter=1_000, init_points=5)
 
-    improvement_below_tol = np.max(opt._space.target[-10:] - opt._space.max()["target"]) < 1
-
-    assert improvement_below_tol
+    improvements = np.diff(np.maximum.accumulate(opt._space.target))
+    assert improvements[-10:].max() < 1
+    assert improvements[-11].max() >= 1

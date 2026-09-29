@@ -443,26 +443,17 @@ class BayesianOptimization:
             if time_taken >= self._timedelta:
                 return True
 
-        if "convergence_tol" in self._termination_criteria and len(self._space.target) > 2:
-            # Find the maximum value of the target function at each iteration
-            running_max = list(accumulate(self._space.target, max))
-            # Determine improvements that have occurred each iteration
-            improvements = np.diff(running_max)
+        if "convergence_tol" in self._termination_criteria and len(self._space.target) >= 2:
             if self._iterations >= self._termination_criteria["convergence_tol"]["n_iters"]:
+                # Determine improvements that have occurred each iteration
+                improvements = np.diff(np.maximum.accumulate(self._space.target))
                 # Check if there are improvements in the specified number of iterations
-                relevant_improvements = (
-                    improvements
-                    if len(self._space.target) == self._termination_criteria["convergence_tol"]["n_iters"]
-                    else improvements[-self._termination_criteria["convergence_tol"]["n_iters"] :]
-                )
-                # There has been no improvement within the iterations specified
-                if len(set(relevant_improvements)) == 1:
-                    return True
-                # The improvement(s) are lower than specified
-                if (
-                    max(relevant_improvements) - min(relevant_improvements)
-                    < self._termination_criteria["convergence_tol"]["abs_tol"]
-                ):
+                relevant_improvements = improvements[
+                    -self._termination_criteria["convergence_tol"]["n_iters"] :
+                ]
+
+                if relevant_improvements.max() <= self._termination_criteria["convergence_tol"]["abs_tol"]:
+                    # There has been no large enough improvement within the iterations specified
                     return True
 
         return False
