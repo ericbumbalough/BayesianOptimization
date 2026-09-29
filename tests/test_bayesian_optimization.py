@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 import pickle
 import warnings
 from pathlib import Path
 
-from _pytest.tmpdir import tmp_path
 import numpy as np
 import pytest
 from scipy.optimize import NonlinearConstraint
@@ -966,12 +965,15 @@ def test_termination_criteria(tmp_path):
         f=target_func_trivial(), pbounds=pbounds, termination_criteria=termination_criteria
     )
 
-    start = datetime.now()
+    start = datetime.now(timezone.utc)
     # Call with large number of iterations, so that this is not the termination criteria
     opt.maximize(n_iter=1_000, init_points=1)
 
     # Allow ~200ms tolerance on timing
-    assert abs((datetime.now() - start).total_seconds() - termination_criteria["time"]["seconds"]) < 0.2
+    assert (
+        abs((datetime.now(timezone.utc) - start).total_seconds() - termination_criteria["time"]["seconds"])
+        < 0.2
+    )
 
     # Terminate if no improvement in last 3 iterations
     termination_criteria = {"convergence_tol": {"n_iters": 3, "abs_tol": 0}}
